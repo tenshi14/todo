@@ -188,7 +188,7 @@ assert.strictEqual(send(TEN, '登録 てん', { group: 'OTHER' }).reply, undefin
 
 // 未登録だと案内が出る
 assert.match(send(TEN, '1000 スーパー').reply, /登録 てん/);
-assert.strictEqual(send(TEN, 'おはよう', { group: true }).reply, undefined);
+assert.match(send(TEN, 'おはよう', { group: true }).reply, /登録 てん/);
 
 // 登録
 assert.match(send(TEN, '登録 てん').reply, /「てん」として登録/);
@@ -212,18 +212,26 @@ assert.match(r.reply, /取り消しました/);
 assert.deepStrictEqual(oct.grid[3].slice(0, 5), ['', '', '', '', '']);
 assert.match(send(TEN, '取消').reply, /取り消せる記録がありません/);
 
-// グループでも記録できる。関係ない会話は無視
-assert.strictEqual(send(TEN, 'きょうは寒いね', { group: true }).reply, undefined);
+// グループでも記録できる
 send(TEN, '2000 日用品 ドラッグストア', { group: true });
 assert.deepStrictEqual(oct.grid[3].slice(0, 5), [5, 2000, 'てん', '日用品', 'ドラッグストア']);
 
-// グループでは「明日10時に」のような会話は記録しない。「円」付きやスペース区切りは OK
+// 精算専用グループ（既定）: 1 対 1 と同じくゆるく読み取り、読めないメッセージには案内を返す
+assert.match(send(TEN, 'りょうかい', { group: true }).reply, /金額と内容を送ってください/);
+send(TEN, '昨日500パン', { group: true });
+assert.deepStrictEqual(oct.grid[4].slice(0, 5), [4, 500, 'てん', '', 'パン']);
+send(TEN, '取消', { group: true });
+
+// 会話もするグループ（DEDICATED_GROUP = false）: 「明日10時に」のような会話は記録せず無視。「円」付きやスペース区切りは OK
+app.CONFIG.DEDICATED_GROUP = false;
+assert.strictEqual(send(TEN, 'きょうは寒いね', { group: true }).reply, undefined);
 assert.strictEqual(send(TEN, '明日10時に集合ね', { group: true }).reply, undefined);
 assert.strictEqual(send(TEN, '昨日500パン', { group: true }).reply, undefined);
 assert.deepStrictEqual(oct.grid[4].slice(0, 5), ['', '', '', '', '']);
 send(AOI, 'パン屋500円', { group: true });
 assert.deepStrictEqual(oct.grid[4].slice(0, 5), [5, 500, 'あおい', '', 'パン屋']);
 send(AOI, '取消', { group: true });
+app.CONFIG.DEDICATED_GROUP = true;
 assert.strictEqual(app.parseEntry('明日10時に', NOW, CATS, true), null);
 assert.strictEqual(app.parseEntry('セブン11', NOW, CATS, true), null);
 assert.strictEqual(app.parseEntry('¥1200スーパー', NOW, CATS, true).amount, 1200);

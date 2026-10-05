@@ -35,6 +35,10 @@ const CONFIG = {
   // 集計欄（「てん | 支払額 | 負担する額 | 精算額」の並び）を上から何行目まで探すか
   SUMMARY_SEARCH_ROWS: 15,
   HISTORY_COUNT: 5,
+  // 精算専用グループ（普通の会話をしない）なら true: グループでも 1 対 1 と同じくゆるく読み取り、
+  // 読み取れないメッセージにも使い方を返信する。
+  // 普通の会話もするグループなら false: 「明日10時に」などを記録しないよう厳しめに読み取り、関係ない発言は無視する。
+  DEDICATED_GROUP: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -165,11 +169,14 @@ function handleText(event) {
   const text = normalizeText(event.message.text);
   const userId = event.source && event.source.userId;
   const isDirect = !event.source || event.source.type === 'user';
+  // true なら関係ない発言にも返信し、金額はゆるく読み取る（1 対 1 と精算専用グループ）
+  const talkative = isDirect || CONFIG.DEDICATED_GROUP;
+  const strict = !talkative;
   const now = event.timestamp ? new Date(event.timestamp) : new Date();
   const props = PropertiesService.getScriptProperties();
 
   if (!userId) {
-    return isDirect || parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, true)
+    return talkative || parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, true)
       ? 'だれが送ったか判別できませんでした。Bot を友だち追加してからもう一度送ってください。'
       : null;
   }
@@ -183,8 +190,8 @@ function handleText(event) {
   if (/^(ヘルプ|使い方|help|\?)$/i.test(text)) return helpText(payer);
 
   if (!payer) {
-    // グループでは関係ない会話に反応しないよう、記録っぽいメッセージのときだけ案内する
-    if (!isDirect && !parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, true)) return null;
+    // 会話もするグループでは、記録っぽいメッセージのときだけ案内する
+    if (!talkative && !parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, true)) return null;
     return 'はじめに、だれのスマホか登録してください。\n' +
       CONFIG.MEMBERS.map(function (n) { return '「登録 ' + n + '」'; }).join(' または ') +
       ' と送ってください。';
@@ -202,10 +209,8 @@ function handleText(event) {
     return withLock(function () { return historyReply(ymdOf(now)); });
   }
 
-  // グループでは普通の会話（「明日10時に」など）を記録しないよう、厳しめに解析する
-  const strict = !isDirect;
   if (!parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, strict)) {
-    return isDirect ? '「1200 スーパー」のように、金額と内容を送ってください。\n「ヘルプ」で使い方を表示します。' : null;
+    return talkative ? '「1200 スーパー」のように、金額と内容を送ってください。\n「ヘルプ」で使い方を表示します。' : null;
   }
   return withLock(function () { return addEntry(props, userId, payer, text, now, strict); });
 }
@@ -229,7 +234,7 @@ function helpText(payer) {
   const other = CONFIG.MEMBERS.filter(function (n) { return n !== payer; })[0] || CONFIG.MEMBERS[1];
   return [
     '📒 使い方',
-    '・1200 スーパー → 自分が払った分として記録（つなげるなら「1200円スーパー」）',
+    '・1200 スーパー → 自分が払った分として記録',
     '・1200 食べ物 オーケー → カテゴリ付きで記録',
     '・' + other + ' 800 薬局 → ' + other + 'が払った分を代わりに記録',
     '・9/28 3000 ガソリン / 昨日 500 パン → 日付を指定',
@@ -266,7 +271,7 @@ function parseAmount(token) {
 /**
  * 「1200 食べ物 スーパー」「スーパー 1,200円」「あおい 800 薬局」「9/28 3000 ガソリン」などを解析する。
  * 金額が見つからなければ null。
- * strict のとき（グループ）は、数字が文字にくっついている場合「円」か「¥」が付いたものだけを金額とみなす
+ * strict のとき（会話もするグループ。CONFIG.DEDICATED_GROUP = false）は、数字が文字にくっついている場合「円」か「¥」が付いたものだけを金額とみなす
  * （「1200円スーパー」は OK、「明日10時に」「セブン11」は無視）。
  * @return {{amount:number, payer:(string|null), category:string, comment:string, date:{y:number,m:number,d:number}}|null}
  */
