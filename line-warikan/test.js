@@ -26,9 +26,11 @@ global.Utilities = {
   getUuid: () => '1234-5678',
 };
 const replies = [];
+const leaves = [];
 global.UrlFetchApp = {
   fetch: (url, opts) => {
-    replies.push(JSON.parse(opts.payload).messages[0].text);
+    if (/\/leave$/.test(url)) leaves.push(url);
+    else replies.push(JSON.parse(opts.payload).messages[0].text);
     return { getResponseCode: () => 200, getContentText: () => '' };
   },
 };
@@ -156,11 +158,17 @@ assert.deepStrictEqual(app.parseMonth('先月', NOW), { y: 2026, m: 9 });
 store.WEBHOOK_TOKEN = 'secret';
 store.LINE_CHANNEL_ACCESS_TOKEN = 'dummy';
 const TEN = 'Uten', AOI = 'Uaoi';
+function post(event, token = 'secret') {
+  replies.length = 0;
+  app.doPost({ parameter: { token }, postData: { contents: JSON.stringify({ events: [event] }) } });
+  return replies[0];
+}
 function send(userId, text, opts = {}) {
   replies.length = 0;
+  const groupId = opts.group === true ? 'G' : opts.group;
   const event = {
     type: 'message', replyToken: 'r', timestamp: (opts.at || NOW).getTime(),
-    source: opts.group ? { type: 'group', groupId: 'G', userId } : { type: 'user', userId },
+    source: groupId ? { type: 'group', groupId, userId } : { type: 'user', userId },
     message: { type: 'text', text },
   };
   const res = app.doPost({ parameter: { token: opts.token || 'secret' }, postData: { contents: JSON.stringify({ events: [event] }) } });
@@ -169,6 +177,14 @@ function send(userId, text, opts = {}) {
 
 // 合言葉が違うリクエストは無視
 assert.strictEqual(send(TEN, '1000 x', { token: 'wrong' }).reply, undefined);
+
+// 精算用グループに招待されると挨拶し、そのグループに紐づく
+assert.match(post({ type: 'join', replyToken: 'r', source: { type: 'group', groupId: 'G' } }), /精算用グループに参加しました/);
+assert.strictEqual(store.GROUP_ID, 'G');
+// 別のグループに招待されたら退出し、そこでのメッセージは無視する
+assert.strictEqual(post({ type: 'join', replyToken: 'r', source: { type: 'group', groupId: 'OTHER' } }), undefined);
+assert.deepStrictEqual(leaves, ['https://api.line.me/v2/bot/group/OTHER/leave']);
+assert.strictEqual(send(TEN, '登録 てん', { group: 'OTHER' }).reply, undefined);
 
 // 未登録だと案内が出る
 assert.match(send(TEN, '1000 スーパー').reply, /登録 てん/);
@@ -200,6 +216,19 @@ assert.match(send(TEN, '取消').reply, /取り消せる記録がありません
 assert.strictEqual(send(TEN, 'きょうは寒いね', { group: true }).reply, undefined);
 send(TEN, '2000 日用品 ドラッグストア', { group: true });
 assert.deepStrictEqual(oct.grid[3].slice(0, 5), [5, 2000, 'てん', '日用品', 'ドラッグストア']);
+
+// グループでは「明日10時に」のような会話は記録しない。「円」付きやスペース区切りは OK
+assert.strictEqual(send(TEN, '明日10時に集合ね', { group: true }).reply, undefined);
+assert.strictEqual(send(TEN, '昨日500パン', { group: true }).reply, undefined);
+assert.deepStrictEqual(oct.grid[4].slice(0, 5), ['', '', '', '', '']);
+send(AOI, 'パン屋500円', { group: true });
+assert.deepStrictEqual(oct.grid[4].slice(0, 5), [5, 500, 'あおい', '', 'パン屋']);
+send(AOI, '取消', { group: true });
+assert.strictEqual(app.parseEntry('明日10時に', NOW, CATS, true), null);
+assert.strictEqual(app.parseEntry('セブン11', NOW, CATS, true), null);
+assert.strictEqual(app.parseEntry('¥1200スーパー', NOW, CATS, true).amount, 1200);
+assert.deepStrictEqual(app.parseEntry('9/28 5250ガソリン円', NOW, CATS, true), null);
+assert.deepStrictEqual(app.parseEntry('9/28 5250円ガソリン', NOW, CATS, true).date, { y: 2026, m: 9, d: 28 });
 
 // 日付指定で先月のシートへ
 send(TEN, '9/30 4000 西友');

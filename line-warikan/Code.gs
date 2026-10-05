@@ -52,10 +52,14 @@ function doPost(e) {
   if (!e.postData || !e.postData.contents) return textOutput('OK');
   const body = JSON.parse(e.postData.contents);
   (body.events || []).forEach(function (event) {
-    if (event.type !== 'message' || !event.message || event.message.type !== 'text') return;
     let reply;
     try {
-      reply = handleText(event);
+      if (event.type === 'join') {
+        reply = handleJoin(props, event);
+      } else if (event.type === 'message' && event.message && event.message.type === 'text') {
+        if (!isAllowedChat(props, event.source)) return;
+        reply = handleText(event);
+      }
     } catch (err) {
       console.error(err && err.stack ? err.stack : err);
       reply = '⚠️ エラーが発生しました: ' + (err && err.message ? err.message : err);
@@ -96,6 +100,63 @@ function resetUsers() {
   console.log('登録ユーザーをリセットしました');
 }
 
+/** 精算用グループの紐づけを外す（別のグループで使い直すとき）。エディタから実行する。 */
+function resetGroup() {
+  PropertiesService.getScriptProperties().deleteProperty('GROUP_ID');
+  console.log('グループの紐づけを解除しました。新しいグループに Bot を招待してください');
+}
+
+// ---------------------------------------------------------------------------
+// 精算用グループ
+// ---------------------------------------------------------------------------
+
+function chatIdOf(source) {
+  return source ? (source.groupId || source.roomId || null) : null;
+}
+
+/**
+ * Bot を使えるのは「1 対 1 のトーク」と「最初に招待された精算用グループ」だけ。
+ * 他のグループでのメッセージは無視する。
+ */
+function isAllowedChat(props, source) {
+  const chatId = chatIdOf(source);
+  if (!chatId) return true;
+  const bound = props.getProperty('GROUP_ID');
+  if (!bound) {
+    props.setProperty('GROUP_ID', chatId); // join イベントを取りこぼしたときの保険
+    return true;
+  }
+  return bound === chatId;
+}
+
+function handleJoin(props, event) {
+  const chatId = chatIdOf(event.source);
+  if (!chatId) return null;
+  const bound = props.getProperty('GROUP_ID');
+  if (bound && bound !== chatId) {
+    leaveChat(event.source);
+    return null;
+  }
+  props.setProperty('GROUP_ID', chatId);
+  return [
+    '👋 精算用グループに参加しました。',
+    'まず、それぞれ 1 回だけ自分の名前を送ってください。',
+    CONFIG.MEMBERS.map(function (n) { return '「登録 ' + n + '」'; }).join(' / '),
+    '',
+    helpText(null),
+  ].join('\n');
+}
+
+function leaveChat(source) {
+  const token = PropertiesService.getScriptProperties().getProperty('LINE_CHANNEL_ACCESS_TOKEN');
+  const url = source.groupId
+    ? 'https://api.line.me/v2/bot/group/' + source.groupId + '/leave'
+    : 'https://api.line.me/v2/bot/room/' + source.roomId + '/leave';
+  UrlFetchApp.fetch(url, {
+    method: 'post', headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // メッセージ処理
 // ---------------------------------------------------------------------------
@@ -107,7 +168,11 @@ function handleText(event) {
   const now = event.timestamp ? new Date(event.timestamp) : new Date();
   const props = PropertiesService.getScriptProperties();
 
-  if (!userId) return isDirect ? 'ユーザーを判別できませんでした' : null;
+  if (!userId) {
+    return isDirect || parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, true)
+      ? 'だれが送ったか判別できませんでした。Bot を友だち追加してからもう一度送ってください。'
+      : null;
+  }
 
   let m;
   if ((m = text.match(/^登録\s*(\S+)$/))) {
@@ -119,7 +184,7 @@ function handleText(event) {
 
   if (!payer) {
     // グループでは関係ない会話に反応しないよう、記録っぽいメッセージのときだけ案内する
-    if (!isDirect && !parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES)) return null;
+    if (!isDirect && !parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, true)) return null;
     return 'はじめに、だれのスマホか登録してください。\n' +
       CONFIG.MEMBERS.map(function (n) { return '「登録 ' + n + '」'; }).join(' または ') +
       ' と送ってください。';
@@ -137,10 +202,12 @@ function handleText(event) {
     return withLock(function () { return historyReply(ymdOf(now)); });
   }
 
-  if (!parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES)) {
+  // グループでは普通の会話（「明日10時に」など）を記録しないよう、厳しめに解析する
+  const strict = !isDirect;
+  if (!parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, strict)) {
     return isDirect ? '「1200 スーパー」のように、金額と内容を送ってください。\n「ヘルプ」で使い方を表示します。' : null;
   }
-  return withLock(function () { return addEntry(props, userId, payer, text, now); });
+  return withLock(function () { return addEntry(props, userId, payer, text, now, strict); });
 }
 
 function registerUser(props, userId, name) {
@@ -162,7 +229,7 @@ function helpText(payer) {
   const other = CONFIG.MEMBERS.filter(function (n) { return n !== payer; })[0] || CONFIG.MEMBERS[1];
   return [
     '📒 使い方',
-    '・1200 スーパー → 自分が払った分として記録',
+    '・1200 スーパー → 自分が払った分として記録（つなげるなら「1200円スーパー」）',
     '・1200 食べ物 オーケー → カテゴリ付きで記録',
     '・' + other + ' 800 薬局 → ' + other + 'が払った分を代わりに記録',
     '・9/28 3000 ガソリン / 昨日 500 パン → 日付を指定',
@@ -199,16 +266,21 @@ function parseAmount(token) {
 /**
  * 「1200 食べ物 スーパー」「スーパー 1,200円」「あおい 800 薬局」「9/28 3000 ガソリン」などを解析する。
  * 金額が見つからなければ null。
+ * strict のとき（グループ）は、数字が文字にくっついている場合「円」か「¥」が付いたものだけを金額とみなす
+ * （「1200円スーパー」は OK、「明日10時に」「セブン11」は無視）。
  * @return {{amount:number, payer:(string|null), category:string, comment:string, date:{y:number,m:number,d:number}}|null}
  */
-function parseEntry(text, now, categories) {
+function parseEntry(text, now, categories, strict) {
   text = normalizeText(text);
   if (!text) return null;
   let tokens = text.split(' ');
 
   // 区切りなしの「1200スーパー」「昨日500パン」も受け付ける（数字のかたまりで区切り直す）
   if (!tokens.some(function (t) { return parseAmount(t) !== null; })) {
-    tokens = text.replace(/(-?[¥\\]?\d[\d,\/]*(?:月\d{1,2}日|円|日)?)/g, ' $1 ').split(' ').filter(String);
+    const chunk = strict
+      ? /(-?[¥\\]\d[\d,]*円?|-?\d[\d,]*円|\d{1,2}\/\d{1,2}|\d{1,2}月\d{1,2}日|\d{1,2}日)/g
+      : /(-?[¥\\]?\d[\d,\/]*(?:月\d{1,2}日|円|日)?)/g;
+    tokens = text.replace(chunk, ' $1 ').split(' ').filter(String);
   }
 
   const today = ymdOf(now);
@@ -346,12 +418,12 @@ function categoriesOf(sheet) {
   return CONFIG.DEFAULT_CATEGORIES;
 }
 
-function addEntry(props, userId, defaultPayer, text, now) {
+function addEntry(props, userId, defaultPayer, text, now, strict) {
   const ss = getSpreadsheet();
-  const date = parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES).date;
+  const date = parseEntry(text, now, CONFIG.DEFAULT_CATEGORIES, strict).date;
   const sheet = getOrCreateMonthSheet(ss, { y: date.y, m: date.m });
   // カテゴリはその月のシートのプルダウンにあるものだけ使う（入力規則の警告を避ける）
-  const entry = parseEntry(text, now, categoriesOf(sheet));
+  const entry = parseEntry(text, now, categoriesOf(sheet), strict);
   if (!entry.payer) entry.payer = defaultPayer;
 
   const row = lastDataRow(sheet) + 1;
