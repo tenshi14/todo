@@ -80,9 +80,8 @@ Bot と 1 対 1 のトークでも同じ操作ができます（`精算` をこ�
 1. [LINE Official Account Manager](https://manager.line.biz/) で LINE 公式アカウントを作成（プランは無料の「コミュニケーションプラン」）
 2. 作ったアカウントの「設定」→「Messaging API」→「Messaging API を利用する」で有効化（プロバイダーは新規作成で OK）
 3. 「設定」→「アカウント設定」→「機能の利用」で **グループ・複数人チャットへの参加を許可する** を選んで保存
-4. 「設定」→「応答設定」で
-   - 応答メッセージ: **オフ**
-   - Webhook: **オン**
+4. 「設定」→「応答設定」で **応答メッセージをオフ** にする
+   （Webhook はここではまだオンにできません。URL を登録する手順 4 でオンにします）
 5. [LINE Developers コンソール](https://developers.line.biz/console/) で同じチャネルを開き、
    「Messaging API 設定」タブの一番下で **チャネルアクセストークン（長期）** を発行してコピー
 
@@ -106,10 +105,12 @@ Bot と 1 対 1 のトークでも同じ操作ができます（`精算` をこ�
 
 ### 4. LINE に Webhook URL を登録する
 
-1. LINE Developers コンソールの「Messaging API 設定」→「Webhook URL」に
-   `ウェブアプリの URL` + `?token=xxxxxxxx`（2-4 の文字列）をつなげて貼り付けて更新
+1. LINE Official Account Manager の「設定」→「Messaging API」（または LINE Developers コンソールの
+   「Messaging API 設定」）の「Webhook URL」に、`ウェブアプリの URL` + `?token=xxxxxxxx`（2-4 の文字列）を
+   つなげて貼り付けて保存
    - 例: `https://script.google.com/macros/s/AKfy.../exec?token=0123abcd...`
-2. 「Webhook の利用」をオン
+2. LINE Official Account Manager の「設定」→「応答設定」で **Webhook をオン**
+   （LINE Developers コンソールの「Webhook の利用」もオンになっているか確認）
 3. 「検証」ボタンはエラーになることがありますが（Apps Script はリダイレクトを返すため）、実際のメッセージは届くので次へ進んで OK
 
 ### 5. 精算用グループを作って登録
