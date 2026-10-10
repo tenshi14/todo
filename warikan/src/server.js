@@ -1,6 +1,9 @@
 // わりかん API（Cloudflare Pages Functions で動く）。データは Cloudflare D1 に保存する。
 import { MEMBERS, CATEGORIES, RECURRING, SESSION_DAYS } from './config.js';
 
+// 「だれの分？」: '' = 割合（2:1）で割る、'half' = 半分ずつ、メンバー名 = その人が全額負担
+export const BURDEN_HALF = 'half';
+
 const COOKIE = 'warikan_session';
 const PBKDF2_ITERATIONS = 20000; // 無料プランの CPU 時間（1 リクエスト 10ms）に収まる範囲
 const MAX_FAILURES = 10; // 15 分間にこれだけ失敗したら、その名前でのログインを止める
@@ -56,6 +59,8 @@ async function route(request, env) {
   if (method === 'DELETE' && (m = path.match(/^\/settlements\/(\d{4}-\d{2})$/))) return unsettle(env.DB, m[1]);
   if (method === 'POST' && path === '/password') return changePassword(request, env.DB, user);
   if (method === 'GET' && path === '/export.csv') return exportCsv(env.DB);
+  if (method === 'GET' && path === '/backup.json') return exportBackup(env.DB);
+  if (method === 'POST' && path === '/import') return importBackup(request, env.DB, user);
 
   return json({ error: 'not found' }, 404);
 }
@@ -102,6 +107,7 @@ function ensureSchema(db) {
         payer TEXT NOT NULL,
         category TEXT NOT NULL DEFAULT '',
         comment TEXT NOT NULL DEFAULT '',
+        burden TEXT NOT NULL DEFAULT '',
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT,
@@ -284,13 +290,15 @@ function validateExpense(input) {
   const payer = input.payer;
   const category = input.category || '';
   const comment = String(input.comment || '').trim();
+  const burden = input.burden || '';
   if (!isValidDate(date)) throw new HttpError(400, '日付が正しくありません');
   if (!Number.isInteger(amount) || amount === 0) throw new HttpError(400, '金額は 0 以外の整数で入力してください');
   if (Math.abs(amount) > 10000000) throw new HttpError(400, '金額が大きすぎます');
   if (!MEMBER_NAMES.includes(payer)) throw new HttpError(400, '払った人を選んでください');
   if (category && !CATEGORIES.includes(category)) throw new HttpError(400, '「何の費用？」が正しくありません');
   if (comment.length > 200) throw new HttpError(400, 'メモが長すぎます');
-  return { date, amount, payer, category, comment };
+  if (burden && burden !== BURDEN_HALF && !MEMBER_NAMES.includes(burden)) throw new HttpError(400, '「だれの分？」が正しくありません');
+  return { date, amount, payer, category, comment, burden };
 }
 
 async function createExpense(request, db, user) {
@@ -298,16 +306,20 @@ async function createExpense(request, db, user) {
   const e = validateExpense(input);
   const clientId = typeof input.clientId === 'string' && input.clientId ? input.clientId.slice(0, 64) : null;
   // 電波が悪くて再送されても、同じ clientId なら二重に記録しない
-  await db.prepare(`INSERT INTO expenses (date, amount, payer, category, comment, created_by, created_at, client_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (client_id) DO NOTHING`)
-    .bind(e.date, e.amount, e.payer, e.category, e.comment, user, nowIso(), clientId).run();
+  await insertExpense(db, e, user, clientId).run();
   return json(await monthData(db, e.date.slice(0, 7)));
+}
+
+function insertExpense(db, e, createdBy, clientId) {
+  return db.prepare(`INSERT INTO expenses (date, amount, payer, category, comment, burden, created_by, created_at, client_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (client_id) DO NOTHING`)
+    .bind(e.date, e.amount, e.payer, e.category, e.comment, e.burden, createdBy, nowIso(), clientId || crypto.randomUUID());
 }
 
 async function updateExpense(request, db, user, id) {
   const e = validateExpense(await body(request));
-  const res = await db.prepare(`UPDATE expenses SET date = ?, amount = ?, payer = ?, category = ?, comment = ?, updated_at = ?
-      WHERE id = ?`).bind(e.date, e.amount, e.payer, e.category, e.comment, nowIso(), id).run();
+  const res = await db.prepare(`UPDATE expenses SET date = ?, amount = ?, payer = ?, category = ?, comment = ?, burden = ?, updated_at = ?
+      WHERE id = ?`).bind(e.date, e.amount, e.payer, e.category, e.comment, e.burden, nowIso(), id).run();
   if (!res.meta.changes) throw new HttpError(404, 'この記録は削除されています');
   return json(await monthData(db, e.date.slice(0, 7)));
 }
@@ -322,10 +334,10 @@ async function deleteExpense(db, id) {
 async function applyRecurring(db, month) {
   for (let i = 0; i < RECURRING.length; i++) {
     const r = RECURRING[i];
-    const res = await db.prepare('INSERT OR IGNORE INTO applied (key) VALUES (?)').bind(`recurring:${month}:${i}`).run();
+    const key = `recurring:${month}:${i}`;
+    const res = await db.prepare('INSERT OR IGNORE INTO applied (key) VALUES (?)').bind(key).run();
     if (res.meta.changes) {
-      await db.prepare(`INSERT INTO expenses (date, amount, payer, category, comment, created_by, created_at)
-          VALUES (?, ?, ?, ?, ?, '自動', ?)`).bind(month + '-01', r.amount, r.payer, r.category, r.comment, nowIso()).run();
+      await insertExpense(db, { date: month + '-01', amount: r.amount, payer: r.payer, category: r.category, comment: r.comment, burden: r.burden || '' }, '自動', key).run();
     }
   }
 }
@@ -334,12 +346,18 @@ async function applyRecurring(db, month) {
 // 月のデータ・精算
 // ---------------------------------------------------------------------------
 
-function summarize(entries) {
+/** 1 件の記録のうち、その人が負担する額 */
+function shareOf(entry, member) {
+  if (!entry.burden) return (entry.amount * member.share) / MEMBERS.reduce((s, m) => s + m.share, 0);
+  if (entry.burden === BURDEN_HALF) return entry.amount / MEMBERS.length;
+  return entry.burden === member.name ? entry.amount : 0;
+}
+
+export function summarize(entries) {
   const total = entries.reduce((s, e) => s + e.amount, 0);
-  const shares = MEMBERS.reduce((s, m) => s + m.share, 0);
   const people = MEMBERS.map((m) => {
     const paid = entries.filter((e) => e.payer === m.name).reduce((s, e) => s + e.amount, 0);
-    const share = (total * m.share) / shares;
+    const share = entries.reduce((s, e) => s + shareOf(e, m), 0);
     return { name: m.name, paid, share: Math.round(share), diff: Math.round(share - paid) };
   });
   const debtor = people.find((p) => p.diff > 0);
@@ -354,7 +372,7 @@ async function monthData(db, month) {
   if (month === current) await applyRecurring(db, month);
 
   const [entriesRes, monthsRes, settlement, suggestionsRes] = await db.batch([
-    db.prepare(`SELECT id, date, amount, payer, category, comment, created_by FROM expenses
+    db.prepare(`SELECT id, date, amount, payer, category, comment, burden, created_by FROM expenses
         WHERE date >= ? AND date < ? ORDER BY date DESC, id DESC`).bind(month + '-01', nextMonth(month) + '-01'),
     db.prepare('SELECT DISTINCT substr(date, 1, 7) AS month FROM expenses ORDER BY month DESC'),
     db.prepare('SELECT amount, from_name, to_name, settled_by, settled_at FROM settlements WHERE month = ?').bind(month),
@@ -376,6 +394,7 @@ async function monthData(db, month) {
     today: todayJst(),
     months: Array.from(months).sort().reverse(),
     members: MEMBERS.map((m) => m.name),
+    ratio: MEMBERS.map((m) => m.share).join(':'),
     categories: CATEGORIES,
     entries,
     summary: summarize(entries),
@@ -400,13 +419,14 @@ async function unsettle(db, month) {
 }
 
 async function exportCsv(db) {
-  const { results } = await db.prepare('SELECT date, amount, payer, category, comment, created_by, created_at FROM expenses ORDER BY date, id').all();
+  const { results } = await db.prepare('SELECT date, amount, payer, category, comment, burden, created_by, created_at FROM expenses ORDER BY date, id').all();
+  const burdenLabel = (b) => (!b ? MEMBERS.map((m) => m.share).join(':') : b === BURDEN_HALF ? '半分ずつ' : b + 'の分');
   const cell = (v) => {
     const s = String(v ?? '');
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   };
-  const lines = [['日付', '金額', '払った人', '何の費用', 'メモ', '記録した人', '記録日時']]
-    .concat(results.map((r) => [r.date, r.amount, r.payer, r.category, r.comment, r.created_by, r.created_at]))
+  const lines = [['日付', '金額', '払った人', '何の費用', 'メモ', 'だれの分', '記録した人', '記録日時']]
+    .concat(results.map((r) => [r.date, r.amount, r.payer, r.category, r.comment, burdenLabel(r.burden), r.created_by, r.created_at]))
     .map((row) => row.map(cell).join(','));
   return new Response('﻿' + lines.join('\r\n') + '\r\n', {
     headers: {
@@ -415,4 +435,78 @@ async function exportCsv(db) {
       'Cache-Control': 'no-store',
     },
   });
+}
+
+// ---------------------------------------------------------------------------
+// バックアップと取り込み
+// ---------------------------------------------------------------------------
+
+/** すべての記録と精算済みの印を JSON で書き出す（このまま /api/import で取り込める） */
+async function exportBackup(db) {
+  // key のない古い記録にも key を付けておく（取り込み直したときに二重にならないように）
+  await db.prepare("UPDATE expenses SET client_id = 'db:' || id WHERE client_id IS NULL").run();
+  const [expenses, settlements] = await db.batch([
+    db.prepare('SELECT id, client_id, date, amount, payer, category, comment, burden, created_by FROM expenses ORDER BY date, id'),
+    db.prepare('SELECT month, amount, from_name, to_name, settled_by, settled_at FROM settlements ORDER BY month'),
+  ]);
+  const backup = {
+    app: 'warikan',
+    version: 1,
+    exportedAt: nowIso(),
+    expenses: expenses.results.map((r) => ({
+      key: r.client_id,
+      date: r.date, amount: r.amount, payer: r.payer, category: r.category, comment: r.comment, burden: r.burden, createdBy: r.created_by,
+    })),
+    settlements: settlements.results.map((r) => ({ month: r.month, amount: r.amount, from: r.from_name, to: r.to_name, by: r.settled_by, at: r.settled_at })),
+  };
+  return new Response(JSON.stringify(backup, null, 1), {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="warikan-backup-${todayJst()}.json"`,
+      'Cache-Control': 'no-store',
+    },
+  });
+}
+
+/**
+ * バックアップ（または過去の記録を整理したファイル）を取り込む。
+ * 同じ key の記録はすでにあれば飛ばすので、何度取り込んでも二重にならない。
+ */
+async function importBackup(request, db, user) {
+  const data = await body(request);
+  if (!data || data.app !== 'warikan' || !Array.isArray(data.expenses)) throw new HttpError(400, 'わりかんのバックアップファイルではありません');
+  if (data.expenses.length > 20000) throw new HttpError(400, '記録が多すぎます');
+
+  const statements = [];
+  data.expenses.forEach((input, i) => {
+    let e;
+    try {
+      e = validateExpense(input);
+    } catch (err) {
+      throw new HttpError(400, `${i + 1} 件目（${input && input.date} ${input && input.comment || ''}）: ${err.message}`);
+    }
+    const key = String(input.key || '').slice(0, 64);
+    if (!key) throw new HttpError(400, `${i + 1} 件目に key がありません`);
+    const createdBy = MEMBER_NAMES.includes(input.createdBy) || input.createdBy === '自動' || input.createdBy === '取り込み' ? input.createdBy : user;
+    if (/^recurring:\d{4}-\d{2}:\d+$/.test(key)) {
+      // 固定費: その月にもう自動で入っていれば取り込まない。取り込んだら、あとで自動で入れない
+      statements.push(db.prepare(`INSERT INTO expenses (date, amount, payer, category, comment, burden, created_by, created_at, client_id)
+          SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM applied WHERE key = ?)
+          ON CONFLICT (client_id) DO NOTHING`)
+        .bind(e.date, e.amount, e.payer, e.category, e.comment, e.burden, createdBy, nowIso(), key, key));
+      statements.push(db.prepare('INSERT OR IGNORE INTO applied (key) VALUES (?)').bind(key));
+    } else {
+      statements.push(insertExpense(db, e, createdBy, key));
+    }
+  });
+  (Array.isArray(data.settlements) ? data.settlements : []).forEach((s) => {
+    if (!/^\d{4}-\d{2}$/.test(s.month) || !Number.isInteger(s.amount)) throw new HttpError(400, '精算済みの記録が正しくありません: ' + s.month);
+    statements.push(db.prepare(`INSERT OR IGNORE INTO settlements (month, amount, from_name, to_name, settled_by, settled_at)
+        VALUES (?, ?, ?, ?, ?, ?)`).bind(s.month, s.amount, String(s.from || ''), String(s.to || ''), String(s.by || user), String(s.at || nowIso())));
+  });
+
+  const before = await db.prepare('SELECT COUNT(*) AS n FROM expenses').first();
+  for (let i = 0; i < statements.length; i += 50) await db.batch(statements.slice(i, i + 50));
+  const after = await db.prepare('SELECT COUNT(*) AS n FROM expenses').first();
+  return json({ added: after.n - before.n, skipped: data.expenses.length - (after.n - before.n) });
 }

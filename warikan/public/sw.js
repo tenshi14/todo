@@ -1,6 +1,6 @@
 // オフラインでも開けるように、画面のファイルを端末に保存しておく。
 // 記録の読み書き（/api/）はキャッシュしない。
-const CACHE = 'warikan-v2';
+const CACHE = 'warikan-v3';
 const FILES = [
   './',
   'index.html',

@@ -127,6 +127,14 @@ async function apiTests() {
   assert.strictEqual(r.body.summary.total, 80440);
   assert.strictEqual((await ten('DELETE', '/expenses/' + okId)).status, 404);
 
+  // ---- だれの分？（全額・半分ずつ） ----
+  r = await ten('POST', '/expenses', { date: today, amount: 3000, payer: 'てん', comment: 'あおいの本', burden: 'あおい', clientId: 'b1' });
+  assert.deepStrictEqual(r.body.summary.transfer, { from: 'あおい', to: 'てん', amount: 26813 + 3000 });
+  r = await ten('POST', '/expenses', { date: today, amount: 1840, payer: 'あおい', comment: '温泉', burden: 'half', clientId: 'b2' });
+  assert.deepStrictEqual(r.body.summary.transfer, { from: 'あおい', to: 'てん', amount: 26813 + 3000 - 920 });
+  assert.strictEqual((await ten('POST', '/expenses', { date: today, amount: 100, payer: 'てん', burden: 'だれか' })).status, 400);
+  for (const e of r.body.entries.filter((x) => x.burden)) await ten('DELETE', '/expenses/' + e.id);
+
   // ---- 精算済み ----
   r = await ten('POST', '/settlements', { month });
   assert.deepStrictEqual([r.body.settlement.amount, r.body.settlement.from, r.body.settlement.to, r.body.settlement.by], [26813, 'あおい', 'てん', 'てん']);
@@ -135,8 +143,31 @@ async function apiTests() {
 
   // ---- CSV ----
   r = await ten('GET', '/export.csv');
-  assert.match(r.body, /^﻿?日付,金額,払った人,何の費用,メモ,記録した人,記録日時\r\n/);
-  assert.match(r.body, /,4000,てん,,西友,てん,/);
+  assert.match(r.body, /^\uFEFF?日付,金額,払った人,何の費用,メモ,だれの分,記録した人,記録日時\r\n/);
+  assert.match(r.body, /,4000,てん,,西友,2:1,てん,/);
+
+  // ---- バックアップと取り込み ----
+  const backup = (await ten('GET', '/backup.json')).body;
+  assert.strictEqual(backup.app, 'warikan');
+  assert.ok(backup.expenses.some((e) => e.key === 'recurring:' + month + ':0'));
+  r = await ten('POST', '/import', backup); // 同じものをもう一度取り込んでも増えない
+  assert.deepStrictEqual(r.body, { added: 0, skipped: backup.expenses.length });
+  r = await ten('POST', '/import', {
+    app: 'warikan', version: 1,
+    expenses: [
+      { key: 'sheet:2025/1:2', date: '2025-01-05', amount: 1000, payer: 'あおい', category: '食べ物', comment: '取り込みテスト', burden: '' },
+      { key: 'sheet:2025/1:3', date: '2025-01-06', amount: 600, payer: 'てん', comment: 'あおいの分', burden: 'あおい' },
+      { key: 'recurring:' + month + ':0', date: month + '-01', amount: 80440, payer: 'てん', category: '電気ガス水道家賃', comment: '家賃' },
+    ],
+    settlements: [{ month: '2025-01', amount: 67, from: 'てん', to: 'あおい', by: 'てん', at: '2025-02-01T00:00:00.000Z' }],
+  });
+  assert.deepStrictEqual(r.body, { added: 2, skipped: 1 }); // 今月の家賃はもう自動で入っているので飛ばす
+  r = await ten('GET', '/month?m=2025-01');
+  // てん: 負担 1000×2/3 − 支払 600 = +66.7、あおい: 負担 1000/3 + 600 − 支払 1000 = −66.7
+  assert.deepStrictEqual(r.body.summary.transfer, { from: 'てん', to: 'あおい', amount: 67 });
+  assert.strictEqual(r.body.settlement.amount, 67);
+  assert.strictEqual((await ten('POST', '/import', { app: 'warikan', expenses: [{ key: 'x', date: 'bad', amount: 1, payer: 'てん' }] })).status, 400);
+  assert.strictEqual((await ten('POST', '/import', { expenses: [] })).status, 400);
 
   // ---- パスワード変更: ほかの端末はログアウトされる ----
   const ten2 = client();
@@ -217,12 +248,13 @@ async function uiTests({ month, last }) {
   await aoi.context.setOffline(true);
   await page.fill('#amount', '1200');
   await page.fill('#comment', 'パン屋');
+  await page.click('#burden button:has-text("半分ずつ")');
   await page.click('#submit');
   await page.waitForSelector('.entry-row.pending');
   assert.match(await page.textContent('#status-line'), /送信待ち 1件（オフライン）/);
   await page.screenshot({ path: path.join(SHOTS, 'offline.png'), fullPage: true });
   await aoi.context.setOffline(false);
-  await page.waitForFunction(() => !document.querySelector('.entry-row.pending') && document.querySelector('#settle-amount').textContent === '¥23,880');
+  await page.waitForFunction(() => !document.querySelector('.entry-row.pending') && document.querySelector('#settle-amount').textContent === '¥24,080');
 
   // ---- てんのスマホ: ログイン（API テストで登録済み）→ あおいの記録が見える ----
   const ten = await newPhone();

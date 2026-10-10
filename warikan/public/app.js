@@ -18,6 +18,7 @@
     queue: [],
     payer: null,
     category: '',
+    burden: '',
     editing: null, // 編集中の記録
     loginName: null,
     loading: false,
@@ -283,6 +284,14 @@
       onclick: () => { state.payer = name; renderForm(); },
     })));
 
+    const members2 = (state.data && state.data.members) || [];
+    const burdens = [['', 'ふたりで' + (state.data && state.data.ratio ? '（' + state.data.ratio + '）' : '')], ['half', '半分ずつ']]
+      .concat(members2.map((n) => [n, n + 'の分']));
+    $('burden').replaceChildren(...burdens.map(([value, label]) => el('button', {
+      type: 'button', role: 'radio', text: label, 'aria-checked': String(value === state.burden),
+      onclick: () => { state.burden = value; renderForm(); },
+    })));
+
     const categories = ['', ...((state.data && state.data.categories) || [])];
     $('categories').replaceChildren(...categories.map((c) => el('button', {
       type: 'button', role: 'radio', text: c || 'なし', 'aria-checked': String(c === state.category),
@@ -329,6 +338,7 @@
           el('span', { class: 'entry-meta' }, [
             el('span', { class: 'badge' + (e.payer === state.user ? ' me' : ''), text: e.payer }),
             e.category && e.comment ? el('span', { text: e.category }) : null,
+            e.burden ? el('span', { class: 'badge burden', text: e.burden === 'half' ? '半分ずつ' : e.burden + 'の分' }) : null,
             e.created_by === '自動' ? el('span', { text: '固定費' }) : null,
             e.pending ? el('span', { class: 'badge pending', text: '送信待ち' }) : null,
           ]),
@@ -355,6 +365,7 @@
     $('comment').value = '';
     $('date').value = todayIso();
     state.category = '';
+    state.burden = '';
     state.payer = state.user;
   }
 
@@ -364,6 +375,7 @@
     $('comment').value = e.comment;
     $('date').value = e.date;
     state.category = e.category;
+    state.burden = e.burden || '';
     state.payer = e.payer;
     render();
     $('entry-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -382,6 +394,7 @@
       amount: state.editing && state.editing.amount < 0 ? -amount : amount,
       payer: state.payer || state.user,
       category: state.category,
+      burden: state.burden,
       comment: $('comment').value.trim(),
     };
     $('amount').blur();
@@ -470,6 +483,23 @@
     }
   }
 
+  async function onImportFile(ev) {
+    const file = ev.target.files[0];
+    ev.target.value = '';
+    if (!file) return;
+    $('import-message').textContent = '取り込み中…';
+    try {
+      const data = JSON.parse(await file.text());
+      const n = Array.isArray(data.expenses) ? data.expenses.length : 0;
+      if (!confirm(`「${file.name}」の記録 ${n} 件を取り込みますか？\n（すでにある記録は飛ばします）`)) { $('import-message').textContent = ''; return; }
+      const res = await api('POST', '/import', data);
+      $('import-message').textContent = `${res.added} 件を取り込みました` + (res.skipped ? `（${res.skipped} 件はすでにあったので飛ばしました）` : '');
+      refresh(null);
+    } catch (e) {
+      $('import-message').textContent = e instanceof SyntaxError ? 'ファイルが読み取れませんでした' : e.message;
+    }
+  }
+
   // ---- 起動 ----
   function bind() {
     $('login-form').addEventListener('submit', onLogin);
@@ -485,10 +515,12 @@
       $('settings-me').textContent = state.user || '';
       $('pw-username').value = state.user || '';
       $('pw-message').textContent = '';
+      $('import-message').textContent = '';
       $('settings').showModal();
     });
     $('close-settings').addEventListener('click', () => $('settings').close());
     $('password-form').addEventListener('submit', onChangePassword);
+    $('import-file').addEventListener('change', onImportFile);
     $('logout').addEventListener('click', async () => {
       if (!confirm('ログアウトしますか？')) return;
       try { await api('POST', '/logout'); } catch (e) { /* オフラインでも画面はログアウトする */ }

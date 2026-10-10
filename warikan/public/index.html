@@ -82,6 +82,11 @@
       </div>
 
       <div class="field">
+        <span class="field-label">だれの分？</span>
+        <div id="burden" class="chips" role="radiogroup" aria-label="だれの分"></div>
+      </div>
+
+      <div class="field">
         <span class="field-label">何の費用？</span>
         <div id="categories" class="chips" role="radiogroup" aria-label="何の費用"></div>
       </div>
@@ -126,7 +131,13 @@
       <p id="pw-message" class="small-text muted" role="status"></p>
     </form>
     <hr>
-    <a class="ghost block" href="/api/export.csv" download>記録をCSVでダウンロード</a>
+    <a class="ghost block" href="/api/export.csv" download>記録をCSVでダウンロード（Excel用）</a>
+    <a class="ghost block" href="/api/backup.json" download>バックアップを保存</a>
+    <label class="ghost block file-btn">
+      バックアップ・整理済みファイルを取り込む
+      <input type="file" id="import-file" accept=".json,application/json" hidden>
+    </label>
+    <p id="import-message" class="small-text muted" role="status"></p>
     <button type="button" id="logout" class="danger">ログアウト</button>
     <button type="button" id="close-settings" class="primary">閉じる</button>
   </dialog>
