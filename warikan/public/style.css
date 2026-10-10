@@ -177,7 +177,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .field-label { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
 .field.row .field-label { margin: 0; }
 
-input[type="text"], input[type="date"], textarea {
+input[type="text"], input[type="password"], input[type="date"], textarea {
   width: 100%;
   border: 1.5px solid var(--line);
   border-radius: 12px;
@@ -186,7 +186,7 @@ input[type="text"], input[type="date"], textarea {
   outline: 0;
 }
 input[type="date"] { width: auto; min-height: 44px; }
-input[type="text"]:focus, input[type="date"]:focus, textarea:focus { border-color: var(--accent); }
+input[type="text"]:focus, input[type="password"]:focus, input[type="date"]:focus, textarea:focus { border-color: var(--accent); }
 
 .segmented {
   display: grid;
@@ -263,17 +263,32 @@ input[type="text"]:focus, input[type="date"]:focus, textarea:focus { border-colo
 
 .entries { list-style: none; margin: 0; padding: 0; }
 .entry-row {
-  display: grid;
-  grid-template-columns: 44px 1fr auto 36px;
+  display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 6px 10px 12px;
+  gap: 2px;
   border-top: 1px solid var(--line);
+  padding-right: 6px;
 }
 .entry-row:first-child { border-top: 0; }
+.entry-row.editing { background: var(--accent-soft); border-radius: 12px; }
+.entry-tap {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 10px 4px 10px 12px;
+  cursor: pointer;
+  border-radius: 12px;
+}
+.entry-tap:active:not(:disabled) { background: var(--bg); }
 .entry-day { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.entry-main { min-width: 0; }
-.entry-comment { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry-main { min-width: 0; display: block; }
+.entry-comment { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry-meta { font-size: 12px; color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; }
 .badge {
   display: inline-block;
@@ -350,3 +365,63 @@ dialog hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
   z-index: 10;
 }
 .toast.error { background: var(--danger); color: #fff; }
+
+/* ---- 起動中・ログイン ---- */
+.boot { display: flex; justify-content: center; padding-top: 30vh; }
+#login-fields { display: grid; gap: 10px; margin-top: 8px; text-align: left; }
+#login-fields .small-text { margin: 0; text-align: center; }
+
+/* ---- 精算済み ---- */
+.settle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  min-height: 36px;
+}
+.settle-status { margin: 0; font-size: 13px; text-align: left; color: var(--muted); }
+.settle-status.done { color: var(--accent); font-weight: 600; }
+.settle-status.changed { color: var(--pending); }
+.ghost {
+  border: 1.5px solid var(--line);
+  background: transparent;
+  border-radius: 12px;
+  padding: 7px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.ghost:active { background: var(--line); }
+a.ghost.block {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  color: var(--text);
+  margin: 0 0 10px;
+  padding: 11px;
+}
+
+/* ---- 編集中 ---- */
+.edit-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 14px;
+  border-radius: 10px;
+  padding: 6px 12px;
+  margin-bottom: 14px;
+}
+.link-btn { border: 0; background: transparent; color: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+
+/* ---- 設定 ---- */
+dialog h3 { font-size: 14px; margin: 0; color: var(--muted); }
+.stack { display: grid; gap: 8px; }
+.stack .ghost { margin-left: 0; }
+dialog .primary { margin-top: 4px; }
+.stack p:empty { display: none; }

@@ -17,24 +17,28 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- 初回セットアップ -->
-  <section id="setup" class="screen" hidden>
-    <div class="setup-card">
+  <!-- 起動中 -->
+  <section id="boot" class="screen boot">
+    <img src="icons/icon.svg" alt="" class="setup-icon">
+  </section>
+
+  <!-- ログイン -->
+  <section id="login" class="screen" hidden>
+    <form id="login-form" class="setup-card" autocomplete="on">
       <img src="icons/icon.svg" alt="" class="setup-icon">
       <h1>わりかん</h1>
-      <div id="setup-link-step">
-        <p>セットアップ用リンクを開いてください。<br>リンクが手元にない場合は、ここに貼り付けても使えます。</p>
-        <form id="setup-form">
-          <textarea id="setup-input" rows="3" placeholder="https://…#setup=…" autocomplete="off" spellcheck="false"></textarea>
-          <button type="submit" class="primary">設定する</button>
-        </form>
+      <p class="muted" id="login-lead">だれがログインしますか？</p>
+      <div id="login-members" class="member-choice" role="radiogroup" aria-label="名前"></div>
+      <input type="text" id="login-name" name="username" autocomplete="username" hidden>
+      <div id="login-fields" hidden>
+        <p class="muted small-text" id="login-hint"></p>
+        <input id="login-password" type="password" name="password" autocomplete="current-password" placeholder="パスワード" required minlength="8">
+        <input id="login-password2" type="password" autocomplete="new-password" placeholder="パスワード（確認）" minlength="8" hidden>
+        <input id="login-code" type="text" autocomplete="off" placeholder="招待コード" hidden>
+        <button type="submit" id="login-submit" class="primary big">ログイン</button>
       </div>
-      <div id="setup-me-step" hidden>
-        <p>このスマホを使うのはだれ？</p>
-        <div id="setup-members" class="member-choice"></div>
-      </div>
-      <p id="setup-error" class="error" role="alert"></p>
-    </div>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
   </section>
 
   <!-- メイン -->
@@ -56,9 +60,17 @@
       <p class="summary-amount" id="settle-amount">—</p>
       <p class="summary-total" id="summary-total"></p>
       <div class="people" id="people"></div>
+      <div class="settle-row">
+        <p id="settle-status" class="settle-status"></p>
+        <button type="button" id="settle-btn" class="ghost">精算済みにする</button>
+      </div>
     </section>
 
     <form id="entry-form" class="card entry" autocomplete="off">
+      <div class="edit-banner" id="edit-banner" hidden>
+        <span>記録を編集中</span>
+        <button type="button" id="cancel-edit" class="link-btn">キャンセル</button>
+      </div>
       <label class="amount-field">
         <span class="yen">¥</span>
         <input id="amount" type="text" inputmode="numeric" placeholder="0" aria-label="金額" enterkeyhint="done">
@@ -102,15 +114,21 @@
 
   <!-- 設定 -->
   <dialog id="settings">
-    <form method="dialog">
-      <h2>設定</h2>
-      <p>このスマホ: <strong id="settings-me"></strong></p>
-      <div id="settings-members" class="member-choice"></div>
-      <hr>
-      <button type="button" id="reset-setup" class="danger">セットアップをやり直す</button>
-      <p class="muted small-text">記録はスプレッドシート「食費と生活費」に保存されています。</p>
-      <button value="close" class="primary">閉じる</button>
+    <h2>設定</h2>
+    <p><strong id="settings-me"></strong> でログイン中</p>
+
+    <form id="password-form" class="stack">
+      <h3>パスワードの変更</h3>
+      <input type="text" name="username" id="pw-username" autocomplete="username" hidden>
+      <input id="pw-current" type="password" autocomplete="current-password" placeholder="今のパスワード" required>
+      <input id="pw-next" type="password" autocomplete="new-password" placeholder="新しいパスワード（8文字以上）" required minlength="8">
+      <button type="submit" class="ghost">変更する</button>
+      <p id="pw-message" class="small-text muted" role="status"></p>
     </form>
+    <hr>
+    <a class="ghost block" href="/api/export.csv" download>記録をCSVでダウンロード</a>
+    <button type="button" id="logout" class="danger">ログアウト</button>
+    <button type="button" id="close-settings" class="primary">閉じる</button>
   </dialog>
 
   <div id="toast" class="toast" role="status" hidden></div>

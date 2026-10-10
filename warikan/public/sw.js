@@ -1,6 +1,6 @@
 // オフラインでも開けるように、画面のファイルを端末に保存しておく。
-// 記録の読み書き（Apps Script への通信）はキャッシュしない。
-const CACHE = 'warikan-v1';
+// 記録の読み書き（/api/）はキャッシュしない。
+const CACHE = 'warikan-v2';
 const FILES = [
   './',
   'index.html',
@@ -28,7 +28,7 @@ self.addEventListener('activate', (event) => {
 // まず端末に保存したものですぐ表示し、裏で最新版を取ってきて次回に備える
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
   event.respondWith(
     caches.open(CACHE).then(async (cache) => {
       const cached = await cache.match(event.request, { ignoreSearch: true });
