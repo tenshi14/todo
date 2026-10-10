@@ -1,0 +1,14 @@
+{
+  "name": "warikan",
+  "private": true,
+  "description": "2人の生活費を Google スプレッドシートに記録して 2:1 で割り勘する PWA（Cloudflare Pages + Google Apps Script）",
+  "scripts": {
+    "test": "node test/api.test.js && node test/e2e.test.js",
+    "test:api": "node test/api.test.js",
+    "test:e2e": "node test/e2e.test.js",
+    "deploy": "wrangler pages deploy web --project-name warikan --branch main"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.56.0"
+  }
+}

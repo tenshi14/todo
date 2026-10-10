@@ -1,8 +1,0 @@
-{
-  "name": "line-warikan",
-  "private": true,
-  "description": "LINE で送った支出を Google スプレッドシートに記録して 2:1 で割り勘する Bot（Google Apps Script）",
-  "scripts": {
-    "test": "node test.js"
-  }
-}
